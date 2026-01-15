@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install dependencies
+COPY requirements-bot.txt .
+RUN pip install --no-cache-dir -r requirements-bot.txt
+
+# Copy bot script
+COPY sora-telegram-bot.py .
+COPY .env .
+
+# Expose webhook port
+EXPOSE 8080
+
+# Run bot
+CMD ["python", "sora-telegram-bot.py"]
