@@ -400,7 +400,7 @@ async def generate_caption(video_prompt: str) -> str:
     
     logger.info("📝 Generating caption with Gemini...")
     
-    model = "gemini-2.0-flash"
+    model = "gemini-3.0-flash-preview"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
     
     instruction = f"""You are a viral social media copywriter for TikTok/Reels.
