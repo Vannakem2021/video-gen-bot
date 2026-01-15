@@ -400,7 +400,7 @@ async def generate_caption(video_prompt: str) -> str:
     
     logger.info("📝 Generating caption with Gemini...")
     
-    model = "gemini-2.5-flash"
+    model = "gemini-2.0-flash"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
     
     instruction = f"""You are a viral social media copywriter for TikTok/Reels.
@@ -416,47 +416,82 @@ RULES:
 5. Keep the caption SHORT (under 100 characters)
 
 CAPTION STYLES (rotate between these):
-• Observation: "The way he just accepted defeat 💀"
-• Relatable: "Why is this actually me though? 😭"
+• Observation: "The way he just accepted defeat"
+• Relatable: "Why is this actually me though"
 • Commentary: "No one is talking about how..."
-• Question: "Tag someone who does this 👇"
+• Question: "Tag someone who does this"
 • POV: "POV: You explain things like this"
-• Main Character: "Main character energy ✨"
+• Main Character: "Main character energy"
 
-Generate a viral caption and exactly 3 hashtags. Return as JSON: {{"caption": "...", "hashtags": ["#...", "#...", "#..."]}}"""
+Generate a viral caption and exactly 3 hashtags. Return as JSON: {{"caption": "your caption here", "hashtags": ["#Tag1", "#Tag2", "#Tag3"]}}"""
     
     payload = {
         "contents": [{"parts": [{"text": instruction}]}],
         "generationConfig": {
             "temperature": 0.7,
-            "maxOutputTokens": 512,
-            "responseMimeType": "application/json"
+            "maxOutputTokens": 256
         }
     }
     
     async with aiohttp.ClientSession() as session:
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 async with session.post(url, json=payload) as resp:
                     if resp.status != 200:
-                        raise Exception(f"Gemini API error: {resp.status}")
+                        error_text = await resp.text()
+                        logger.warning(f"Gemini API error {resp.status}: {error_text[:200]}")
+                        continue
                     
                     data = await resp.json()
                     raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
                     
-                    caption_data = json.loads(raw_text)
-                    caption = caption_data.get('caption', '').strip()
-                    hashtags = caption_data.get('hashtags', ['#Viral', '#Trending', '#ForYou'])
+                    logger.info(f"DEBUG: Gemini raw response: {raw_text[:300]}")
+                    
+                    # Try to parse JSON (handle various formats)
+                    caption = None
+                    hashtags = ['#Viral', '#Trending', '#ForYou']
+                    
+                    try:
+                        # Clean the response - remove markdown code blocks if present
+                        clean_text = raw_text
+                        if '```json' in clean_text:
+                            clean_text = clean_text.split('```json')[1].split('```')[0]
+                        elif '```' in clean_text:
+                            clean_text = clean_text.split('```')[1].split('```')[0]
+                        
+                        # Remove newlines inside strings that break JSON
+                        clean_text = clean_text.strip()
+                        
+                        caption_data = json.loads(clean_text)
+                        caption = caption_data.get('caption', '').strip()
+                        hashtags = caption_data.get('hashtags', hashtags)
+                        
+                    except json.JSONDecodeError:
+                        # Fallback: Extract caption using regex
+                        logger.warning("JSON parse failed, trying regex extraction")
+                        
+                        # Try to find "caption": "..." pattern
+                        caption_match = re.search(r'"caption"\s*:\s*"([^"]+)"', raw_text)
+                        if caption_match:
+                            caption = caption_match.group(1)
+                        
+                        # Try to find hashtags
+                        hashtag_matches = re.findall(r'#\w+', raw_text)
+                        if hashtag_matches:
+                            hashtags = hashtag_matches[:3]
                     
                     if caption and len(caption) >= 5:
                         # Ensure hashtags start with #
                         formatted_tags = [tag if tag.startswith('#') else f'#{tag}' for tag in hashtags[:3]]
-                        return f"{caption}\n{' '.join(formatted_tags)}"
+                        result = f"{caption}\n{' '.join(formatted_tags)}"
+                        logger.info(f"✅ Generated caption: {result[:100]}...")
+                        return result
                     
             except Exception as e:
                 logger.warning(f"Caption attempt {attempt + 1} failed: {e}")
     
     # Fallback
+    logger.warning("All caption attempts failed, using fallback")
     return "Check this out! 🔥\n#Viral #Trending #ForYou"
 
 
