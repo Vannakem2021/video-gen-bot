@@ -895,12 +895,12 @@ async def handle_generate_command(chat_id: str = None):
                 await send_telegram_message(
                     f"🎬 Started: `{uuid[:12]}...`\n"
                     f"📄 Prompt: {prompt[:50]}...\n"
-                    f"⏳ Waiting for completion (3-5 min)",
+                    f"⏳ Waiting for webhook callback (3-5 min)",
                     [chat_id] if chat_id else None
                 )
                 
-                # Start polling in background (as fallback to webhook)
-                asyncio.create_task(poll_and_complete(uuid))
+                # Webhook will handle completion - no polling needed
+                logger.info(f"Job {uuid} registered, waiting for webhook callback")
                 
             except Exception as e:
                 logger.error(f"Error processing {record_id}: {e}")
