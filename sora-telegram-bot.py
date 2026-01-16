@@ -1010,30 +1010,12 @@ async def handle_sora_webhook(request):
         # DEBUG: Log full payload to understand structure
         logger.info(f"📥 Webhook raw payload: {json.dumps(data, default=str)[:500]}")
         
-        # GeminiGen sends different formats - handle both
-        # Format 1: {event: "...", data: {uuid: "...", media_url: "..."}}
-        # Format 2: {uuid: "...", status: 2, media_url: "..."}
+        # GeminiGen uses "event_name" not "event" (confirmed from actual payload)
+        # Format: {event_name: "VIDEO_GENERATION_COMPLETED", event_uuid: "...", data: {uuid: "...", media_url: "..."}}
         
-        event = data.get('event')
-        
-        if event:
-            # Format 1: Nested payload
-            payload = data.get('data', {})
-            uuid = payload.get('uuid')
-        else:
-            # Format 2: Flat payload - check status field
-            uuid = data.get('uuid')
-            payload = data
-            status = data.get('status')
-            
-            if status == 2:
-                event = 'VIDEO_GENERATION_COMPLETED'
-            elif status == 3:
-                event = 'VIDEO_GENERATION_FAILED'
-            else:
-                # Status 1 = still processing, just acknowledge
-                logger.info(f"📥 Webhook received: status={status} for {uuid} (still processing)")
-                return web.Response(text="OK", status=200)
+        event = data.get('event_name') or data.get('event')
+        payload = data.get('data', {})
+        uuid = payload.get('uuid')
         
         logger.info(f"📥 Webhook received: {event} for {uuid}")
         
@@ -1042,7 +1024,7 @@ async def handle_sora_webhook(request):
             if uuid and video_url:
                 await complete_video_generation(uuid, video_url)
             else:
-                logger.warning(f"Missing video_url in completed webhook for {uuid}")
+                logger.warning(f"Missing video_url in completed webhook for {uuid}. Payload: {json.dumps(payload, default=str)[:200]}")
         
         elif event == 'VIDEO_GENERATION_FAILED':
             error_msg = payload.get('error_message', 'Unknown error')
@@ -1057,6 +1039,8 @@ async def handle_sora_webhook(request):
                     [job.get('chat_id')] if job.get('chat_id') else None
                 )
                 del pending_jobs[uuid]
+        else:
+            logger.info(f"📥 Ignoring webhook event: {event}")
         
         return web.Response(text="OK", status=200)
     
