@@ -110,9 +110,9 @@ def parse_video_length(video_length_value) -> int:
     if not video_length_value:
         return 10
     
-    # Handle single select object (pyairtable returns dict with 'name')
+    # Handle single select object (Baserow returns dict with 'value', Airtable uses 'name')
     if isinstance(video_length_value, dict):
-        value_str = video_length_value.get('name', '10s')
+        value_str = video_length_value.get('value') or video_length_value.get('name', '10s')
     else:
         value_str = str(video_length_value)
     
@@ -400,7 +400,7 @@ async def generate_caption(video_prompt: str) -> str:
     
     logger.info("📝 Generating caption with Gemini...")
     
-    model = "gemini-3.0-flash-preview"
+    model = "gemini-3-flash-preview"
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
     
     instruction = f"""You are a viral social media copywriter for TikTok/Reels.
@@ -871,6 +871,7 @@ async def handle_generate_command(chat_id: str = None):
                 page_name = await get_page_name(page_id)
             
             logger.info(f"DEBUG: Extracted page_id = {page_id}, page_name = {page_name}")
+            logger.info(f"DEBUG: Video Length raw = {video_length}, parsed duration = {parse_video_length(video_length)}s")
             
             duration = parse_video_length(video_length)
             
