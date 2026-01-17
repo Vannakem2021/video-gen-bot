@@ -45,7 +45,7 @@ Format:
         ],
         "generationConfig": {
             "temperature": 0.9,
-            "maxOutputTokens": 200
+            "maxOutputTokens": 300  # Increased to prevent truncation
         }
     }
     
@@ -59,17 +59,26 @@ Format:
                 
                 data = await resp.json()
                 
+                # Debug: Log full response
+                logger.info(f"DEBUG: Gemini response: {json.dumps(data, default=str)[:500]}")
+                
                 # Extract text from Gemini response
                 candidates = data.get('candidates', [])
                 if candidates:
-                    content = candidates[0].get('content', {})
+                    candidate = candidates[0]
+                    finish_reason = candidate.get('finishReason', 'UNKNOWN')
+                    logger.info(f"DEBUG: Gemini finishReason: {finish_reason}")
+                    
+                    content = candidate.get('content', {})
                     parts = content.get('parts', [])
                     if parts:
                         caption = parts[0].get('text', '').strip()
                         # Remove any quotation marks
                         caption = caption.strip('"').strip("'")
+                        logger.info(f"✅ Generated caption: {caption}")
                         return caption
                 
+                logger.warning("No caption in Gemini response, using fallback")
                 return "Check this out! 🔥\n#Viral #Trending #ForYou"
                 
     except Exception as e:
