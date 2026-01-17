@@ -90,12 +90,8 @@ async def handle_generate_command(chat_id: str = None):
             try:
                 await update_record_status(record_id, 'Processing')
                 
-                # Call Sora API - returns dict with uuid
-                result = await generate_video(prompt, duration)
-                uuid = result.get('uuid')
-                
-                if not uuid:
-                    raise Exception("No UUID returned from Sora API")
+                # Call Sora API - returns uuid string directly
+                uuid = await generate_video(prompt, duration)
                 
                 logger.info(f"✅ Generation started: {uuid}")
                 
@@ -135,12 +131,9 @@ async def poll_and_complete(uuid: str):
         return
     
     try:
-        result = await poll_for_completion(uuid)
-        
-        if result.get('completed'):
-            await complete_video_generation(uuid, result.get('media_url'))
-        else:
-            raise Exception(result.get('error', 'Polling failed'))
+        # poll_for_completion returns video_url string directly
+        video_url = await poll_for_completion(uuid)
+        await complete_video_generation(uuid, video_url)
         
     except Exception as e:
         logger.error(f"Polling failed for {uuid}: {e}")
