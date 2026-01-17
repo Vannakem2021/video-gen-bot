@@ -232,18 +232,34 @@ async def handle_sora_webhook(request):
                 logger.warning(f"Missing video_url in completed webhook for {uuid}. Full data: {json.dumps(data, default=str)[:500]}")
         
         elif event == 'VIDEO_GENERATION_FAILED':
-            error_msg = payload.get('error_message', 'Unknown error')
+            error_msg = payload.get('error_message') or data.get('error_message') or 'Unknown error'
+            error_code = payload.get('error_code') or data.get('error_code') or ''
+            
+            logger.error(f"❌ Video generation failed: {uuid} - {error_code}: {error_msg}")
             
             job = pending_jobs.get(uuid)
             if job:
+                # Update Baserow record to Error status
                 await update_record_status(job['record_id'], 'Error')
                 await send_telegram_message(
-                    f"❌ Video generation failed\n"
+                    f"❌ *Video Generation Failed*\n\n"
                     f"UUID: `{uuid[:12]}...`\n"
-                    f"Error: {error_msg}",
+                    f"Error: {error_msg}\n"
+                    f"Code: {error_code}",
                     [job.get('chat_id')] if job.get('chat_id') else None
                 )
                 del pending_jobs[uuid]
+            else:
+                # Job not found - still notify default chat so errors aren't lost
+                logger.warning(f"Job {uuid} not in pending_jobs - sending to default chat")
+                await send_telegram_message(
+                    f"⚠️ *Sora Error (untracked job)*\n\n"
+                    f"UUID: `{uuid[:12] if uuid else 'unknown'}...`\n"
+                    f"Error: {error_msg}\n"
+                    f"Code: {error_code}",
+                    None  # Will use default TELEGRAM_CHAT_IDS
+                )
+        
         else:
             logger.info(f"📥 Ignoring webhook event: {event}")
         
