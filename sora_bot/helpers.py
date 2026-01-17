@@ -39,41 +39,39 @@ def parse_video_length(video_length_value) -> str:
 
 def get_next_available_slot(scheduled_slots: List[datetime], page_id: str) -> datetime:
     """Find next available posting slot in Cambodia time (UTC+7)"""
-    now = datetime.now(CAMBODIA_TZ)
+    # Get current time in Cambodia timezone (proper way)
+    now_utc = datetime.now(timezone.utc)
+    now_cambodia = now_utc.astimezone(CAMBODIA_TZ)
     
-    # Start checking from today
-    check_date = now.date()
+    logger.info(f"DEBUG: Current Cambodia time: {now_cambodia.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # Check next 30 days for available slots
-    for _ in range(30):
+    for day_offset in range(30):
+        # Calculate current day in Cambodia time
+        current_day = now_cambodia + timedelta(days=day_offset)
+        current_day = current_day.replace(hour=0, minute=0, second=0, microsecond=0)
+        
         for hour in POSTING_TIMES:
-            slot = datetime.combine(
-                check_date, 
-                datetime.min.time().replace(hour=hour), 
-                tzinfo=CAMBODIA_TZ
-            )
+            slot_time = current_day.replace(hour=hour)
             
-            # Skip slots in the past
-            if slot <= now:
+            # Skip past slots
+            if slot_time <= now_cambodia:
+                logger.info(f"DEBUG: Skipping past slot: {slot_time.strftime('%Y-%m-%d %H:%M')}")
                 continue
             
-            # Check if slot is already taken
-            slot_taken = False
-            for scheduled in scheduled_slots:
-                if isinstance(scheduled, str):
-                    try:
-                        scheduled = datetime.fromisoformat(scheduled.replace('Z', '+00:00'))
-                    except:
-                        continue
-                
-                if scheduled.astimezone(CAMBODIA_TZ).replace(minute=0, second=0, microsecond=0) == slot:
-                    slot_taken = True
-                    break
+            # Check if slot is taken (compare without timezone for simplicity)
+            slot_naive = slot_time.replace(tzinfo=None)
+            is_taken = any(
+                scheduled.replace(second=0, microsecond=0, tzinfo=None) == slot_naive.replace(second=0, microsecond=0)
+                for scheduled in scheduled_slots
+            )
             
-            if not slot_taken:
-                return slot
-        
-        check_date += timedelta(days=1)
+            if not is_taken:
+                logger.info(f"DEBUG: Found available slot: {slot_time.strftime('%Y-%m-%d %H:%M')} Cambodia time")
+                # Keep timezone info
+                return slot_time
     
-    # Fallback: 24 hours from now
-    return now + timedelta(hours=24)
+    # Fallback: tomorrow first slot
+    fallback = now_cambodia + timedelta(days=1)
+    return fallback.replace(hour=POSTING_TIMES[0], minute=0, second=0, microsecond=0)
+
