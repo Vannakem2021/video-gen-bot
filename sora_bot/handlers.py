@@ -5,7 +5,8 @@ Handler functions for Telegram commands and GeminiGen webhooks.
 """
 
 import json
-from datetime import datetime
+import asyncio
+from datetime import datetime, timezone, timedelta
 from aiohttp import web
 
 from .config import pending_jobs, logger
@@ -14,7 +15,8 @@ from .telegram_client import send_telegram_message
 from .sora_api import generate_video, poll_for_completion
 from .gemini_caption import generate_caption
 from .baserow_client import (
-    get_ready_records, update_record_status, create_post_queue_record, get_page_name
+    get_ready_records, update_record_status, create_post_queue_record, get_page_name,
+    get_record_by_uuid, get_records_by_status, save_generation_uuid
 )
 
 
@@ -95,13 +97,17 @@ async def handle_generate_command(chat_id: str = None):
                 
                 logger.info(f"✅ Generation started: {uuid}")
                 
+                # Save UUID to Baserow for crash recovery
+                await save_generation_uuid(record_id, uuid)
+                
                 pending_jobs[uuid] = {
                     'record_id': record_id,
                     'prompt': prompt,
                     'page_id': page_id,
                     'page_name': page_name,
                     'status': 'generating',
-                    'chat_id': chat_id
+                    'chat_id': chat_id,
+                    'started_at': datetime.now(timezone.utc).isoformat()
                 }
                 
                 await send_telegram_message(
@@ -155,9 +161,32 @@ async def complete_video_generation(uuid: str, video_url: str):
     """Complete video generation - save to Baserow, generate caption, notify"""
     
     job = pending_jobs.get(uuid)
+    
+    # Fallback: If not in memory, look up from Baserow (crash recovery)
     if not job:
-        logger.warning(f"No pending job found for {uuid}")
-        return
+        logger.info(f"Job {uuid} not in memory, checking Baserow...")
+        record = await get_record_by_uuid(uuid)
+        if record:
+            # Reconstruct job info from Baserow record
+            target_page = record.get('Target Page', [])
+            if isinstance(target_page, list) and len(target_page) > 0:
+                page_id = target_page[0].get('id') if isinstance(target_page[0], dict) else target_page[0]
+                page_name = target_page[0].get('value', 'Unknown') if isinstance(target_page[0], dict) else 'Unknown'
+            else:
+                page_id = None
+                page_name = 'Unknown'
+            
+            job = {
+                'record_id': record['id'],
+                'prompt': record.get('Prompt', ''),
+                'page_id': page_id,
+                'page_name': page_name,
+                'chat_id': None  # Lost on crash, will use default chat IDs
+            }
+            logger.info(f"✅ Recovered job from Baserow: record_id={record['id']}")
+        else:
+            logger.warning(f"No pending job found for {uuid} (not in memory or Baserow)")
+            return
     
     logger.info(f"✅ Completing generation: {uuid}")
     
@@ -166,6 +195,7 @@ async def complete_video_generation(uuid: str, video_url: str):
     page_id = job['page_id']
     page_name = job['page_name']
     chat_id = job.get('chat_id')
+
     
     try:
         # Update Baserow with video
@@ -238,24 +268,38 @@ async def handle_sora_webhook(request):
             logger.error(f"❌ Video generation failed: {uuid} - {error_code}: {error_msg}")
             
             job = pending_jobs.get(uuid)
+            
+            # Fallback: If not in memory, look up from Baserow (crash recovery)
+            if not job and uuid:
+                logger.info(f"Job {uuid} not in memory for failure handling, checking Baserow...")
+                record = await get_record_by_uuid(uuid)
+                if record:
+                    job = {
+                        'record_id': record['id'],
+                        'prompt': record.get('Prompt', ''),
+                        'chat_id': None
+                    }
+                    logger.info(f"✅ Recovered failed job from Baserow: record_id={record['id']}")
+            
             if job:
                 # Update Baserow record to Error status
                 await update_record_status(job['record_id'], 'Error')
                 await send_telegram_message(
                     f"❌ *Video Generation Failed*\n\n"
                     f"UUID: `{uuid[:12]}...`\n"
-                    f"Error: {error_msg}\n"
+                    f"Error: {escape_markdown(error_msg)}\n"
                     f"Code: {error_code}",
                     [job.get('chat_id')] if job.get('chat_id') else None
                 )
-                del pending_jobs[uuid]
+                if uuid in pending_jobs:
+                    del pending_jobs[uuid]
             else:
-                # Job not found - still notify default chat so errors aren't lost
-                logger.warning(f"Job {uuid} not in pending_jobs - sending to default chat")
+                # Job not found anywhere - still notify default chat so errors aren't lost
+                logger.warning(f"Job {uuid} not found in memory or Baserow - sending to default chat")
                 await send_telegram_message(
                     f"⚠️ *Sora Error (untracked job)*\n\n"
                     f"UUID: `{uuid[:12] if uuid else 'unknown'}...`\n"
-                    f"Error: {error_msg}\n"
+                    f"Error: {escape_markdown(error_msg)}\n"
                     f"Code: {error_code}",
                     None  # Will use default TELEGRAM_CHAT_IDS
                 )
@@ -279,3 +323,110 @@ async def health_check(request):
         "pending_jobs": len(pending_jobs),
         "timestamp": datetime.now().isoformat()
     })
+
+
+async def recover_pending_jobs():
+    """On startup, check for records stuck in 'Processing' status and resume polling"""
+    logger.info("🔄 Checking for pending jobs to recover...")
+    
+    try:
+        processing_records = await get_records_by_status('Processing')
+        
+        if not processing_records:
+            logger.info("✅ No stuck jobs to recover")
+            return
+        
+        logger.info(f"📋 Found {len(processing_records)} records in Processing status")
+        
+        for record in processing_records:
+            uuid = record.get('Generation UUID')
+            if not uuid:
+                logger.warning(f"Record {record['id']} has no UUID, marking as Error")
+                await update_record_status(record['id'], 'Error')
+                continue
+            
+            # Try to poll for completion
+            logger.info(f"🔄 Recovering job {uuid[:12]}... for record {record['id']}")
+            
+            # Reconstruct job info
+            target_page = record.get('Target Page', [])
+            if isinstance(target_page, list) and len(target_page) > 0:
+                page_id = target_page[0].get('id') if isinstance(target_page[0], dict) else target_page[0]
+                page_name = target_page[0].get('value', 'Unknown') if isinstance(target_page[0], dict) else 'Unknown'
+            else:
+                page_id = None
+                page_name = 'Unknown'
+            
+            pending_jobs[uuid] = {
+                'record_id': record['id'],
+                'prompt': record.get('Prompt', ''),
+                'page_id': page_id,
+                'page_name': page_name,
+                'status': 'recovering',
+                'chat_id': None,
+                'started_at': datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Start polling in background
+            asyncio.create_task(poll_and_complete(uuid))
+        
+        await send_telegram_message(
+            f"🔄 *Bot Restarted*\n"
+            f"Recovering {len(processing_records)} pending job(s)...",
+            None  # Use default chat IDs
+        )
+        
+    except Exception as e:
+        logger.error(f"Error during job recovery: {e}")
+
+
+async def cleanup_stale_jobs():
+    """Background task to mark jobs stuck in Processing for >30 min as Error"""
+    STALE_THRESHOLD_MINUTES = 30
+    
+    while True:
+        await asyncio.sleep(1800)  # Run every 30 minutes
+        
+        try:
+            logger.info("🧹 Running stale job cleanup...")
+            
+            processing_records = await get_records_by_status('Processing')
+            now = datetime.now(timezone.utc)
+            stale_count = 0
+            
+            for record in processing_records:
+                # Check in-memory job first
+                uuid = record.get('Generation UUID')
+                if uuid and uuid in pending_jobs:
+                    job = pending_jobs[uuid]
+                    started_at_str = job.get('started_at')
+                    if started_at_str:
+                        try:
+                            started_at = datetime.fromisoformat(started_at_str)
+                            age_minutes = (now - started_at).total_seconds() / 60
+                            if age_minutes > STALE_THRESHOLD_MINUTES:
+                                logger.warning(f"⏰ Job {uuid[:12]}... is stale ({age_minutes:.0f} min old)")
+                                await update_record_status(record['id'], 'Error')
+                                del pending_jobs[uuid]
+                                stale_count += 1
+                        except:
+                            pass
+                else:
+                    # No UUID or not in memory - might be orphaned, mark as error
+                    logger.warning(f"⚠️ Record {record['id']} stuck in Processing with no active job")
+                    await update_record_status(record['id'], 'Error')
+                    stale_count += 1
+            
+            if stale_count > 0:
+                await send_telegram_message(
+                    f"🧹 *Stale Job Cleanup*\n"
+                    f"Marked {stale_count} stuck job(s) as Error",
+                    None
+                )
+                logger.info(f"🧹 Cleanup complete: {stale_count} stale jobs marked as Error")
+            else:
+                logger.info("🧹 Cleanup complete: No stale jobs found")
+                
+        except Exception as e:
+            logger.error(f"Error during stale job cleanup: {e}")
+

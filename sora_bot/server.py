@@ -13,7 +13,7 @@ from .config import (
     TELEGRAM_CHAT_IDS, WEBHOOK_HOST, WEBHOOK_PORT, WEBHOOK_PATH,
     logger
 )
-from .handlers import handle_sora_webhook, health_check, handle_generate_command
+from .handlers import handle_sora_webhook, health_check, handle_generate_command, recover_pending_jobs, cleanup_stale_jobs
 from .telegram_client import send_telegram_with_keyboard, handle_status_command
 
 
@@ -129,6 +129,13 @@ async def main():
     logger.info(f"🌐 Webhook server started on http://{WEBHOOK_HOST}:{WEBHOOK_PORT}")
     logger.info(f"📍 Webhook endpoint: {WEBHOOK_PATH}")
     logger.info(f"💡 Configure GeminiGen webhook URL: http://YOUR_VPS_IP:{WEBHOOK_PORT}{WEBHOOK_PATH}")
+    
+    # Recover any pending jobs from before restart
+    await recover_pending_jobs()
+    
+    # Start stale job cleanup background task
+    asyncio.create_task(cleanup_stale_jobs())
+    logger.info("🧹 Stale job cleanup task started (runs every 30 min)")
     
     # Start Telegram polling
     await poll_telegram_updates()

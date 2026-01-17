@@ -62,6 +62,99 @@ def clear_token_cache():
     _token_expiry = None
 
 
+async def get_record_by_uuid(uuid: str):
+    """Find a Reels Generation record by its Generation UUID field"""
+    url = f"{BASEROW_URL}/api/database/rows/table/{REELS_GENERATION_TABLE}/"
+    params = {
+        'user_field_names': 'true',
+        'filter__Generation UUID__equal': uuid,
+        'size': 1
+    }
+    
+    for attempt in range(2):
+        try:
+            headers = await get_baserow_headers()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, params=params) as resp:
+                    if resp.status == 401 and attempt == 0:
+                        clear_token_cache()
+                        continue
+                    
+                    if resp.status != 200:
+                        return None
+                    
+                    data = await resp.json()
+                    results = data.get('results', [])
+                    if results:
+                        return results[0]
+                    return None
+        except Exception as e:
+            logger.error(f"Error looking up record by UUID {uuid}: {e}")
+            return None
+    return None
+
+
+async def get_records_by_status(status: str):
+    """Get all records with a specific status (for recovery/cleanup)"""
+    url = f"{BASEROW_URL}/api/database/rows/table/{REELS_GENERATION_TABLE}/"
+    
+    status_id = REELS_STATUS_OPTIONS.get(status)
+    params = {
+        'user_field_names': 'true',
+        'size': 100
+    }
+    
+    # Baserow filter for single_select by value
+    if status_id:
+        params['filter__Status__single_select_equal'] = status_id
+    
+    for attempt in range(2):
+        try:
+            headers = await get_baserow_headers()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, params=params) as resp:
+                    if resp.status == 401 and attempt == 0:
+                        clear_token_cache()
+                        continue
+                    
+                    if resp.status != 200:
+                        error = await resp.text()
+                        logger.error(f"Failed to get records by status: {resp.status} - {error}")
+                        return []
+                    
+                    data = await resp.json()
+                    return data.get('results', [])
+        except Exception as e:
+            logger.error(f"Error fetching records by status {status}: {e}")
+            return []
+    return []
+
+
+async def save_generation_uuid(record_id: int, uuid: str) -> bool:
+    """Save the generation UUID to a Baserow record for crash recovery"""
+    url = f"{BASEROW_URL}/api/database/rows/table/{REELS_GENERATION_TABLE}/{record_id}/"
+    update_fields = {'Generation UUID': uuid}
+    
+    for attempt in range(2):
+        try:
+            headers = await get_baserow_headers()
+            async with aiohttp.ClientSession() as session:
+                async with session.patch(url, headers=headers, json=update_fields, params={'user_field_names': 'true'}) as resp:
+                    if resp.status in [200, 201]:
+                        logger.info(f"✅ Saved UUID {uuid[:12]}... to record {record_id}")
+                        return True
+                    elif resp.status == 401 and attempt == 0:
+                        clear_token_cache()
+                        continue
+                    else:
+                        error_text = await resp.text()
+                        logger.error(f"Failed to save UUID: {resp.status} - {error_text}")
+                        return False
+        except Exception as e:
+            logger.error(f"Error saving UUID to record {record_id}: {e}")
+            return False
+    return False
+
 async def get_page_name(page_id) -> str:
     """Lookup page name from Facebook Pages table"""
     if not page_id:

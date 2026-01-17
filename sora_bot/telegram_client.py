@@ -84,42 +84,4 @@ async def handle_status_command(chat_id: str):
     await send_telegram_with_keyboard(status_text, chat_id)
 
 
-async def poll_telegram_updates(handle_message_callback):
-    """Long-poll for Telegram updates (simple bot implementation)"""
-    if not TELEGRAM_BOT_TOKEN:
-        logger.warning("TELEGRAM_BOT_TOKEN not configured, skipping Telegram bot")
-        return
-    
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
-    offset = 0
-    
-    logger.info("📱 Starting Telegram bot polling...")
-    
-    async with aiohttp.ClientSession() as session:
-        while True:
-            try:
-                async with session.get(url, params={'offset': offset, 'timeout': 30}) as resp:
-                    if resp.status != 200:
-                        await asyncio.sleep(5)
-                        continue
-                    
-                    data = await resp.json()
-                    
-                    for update in data.get('result', []):
-                        offset = update['update_id'] + 1
-                        
-                        message = update.get('message', {})
-                        text = message.get('text', '')
-                        chat_id = str(message.get('chat', {}).get('id', ''))
-                        
-                        if not chat_id:
-                            continue
-                        
-                        await handle_message_callback(text, chat_id)
-                        
-            except Exception as e:
-                logger.error(f"Telegram polling error: {e}")
-                await asyncio.sleep(5)
 
-
-import asyncio  # Import at end to avoid circular import issues
