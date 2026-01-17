@@ -6,11 +6,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy bot script
-COPY sora-telegram-bot.py .
+# Copy the sora_bot package and entry point
+COPY sora_bot/ ./sora_bot/
+COPY main.py .
 
 # Expose webhook port
 EXPOSE 8080
 
 # Run bot
-CMD ["python", "sora-telegram-bot.py"]
+CMD ["python", "main.py"]
