@@ -162,18 +162,12 @@ async def complete_video_generation(uuid: str, video_url: str):
     
     job = pending_jobs.get(uuid)
     
-    # Fallback: If not in memory, look up from Baserow (crash recovery)
+    # Job should always be in pending_jobs when called from polling
+    # Baserow fallback only for crash recovery scenarios
     if not job:
-        logger.info(f"Job {uuid} not in memory, checking Baserow...")
+        logger.info(f"Job {uuid} not in memory, checking Baserow for crash recovery...")
         record = await get_record_by_uuid(uuid)
         if record:
-            # Check if already completed (race condition prevention)
-            status = record.get('Status', {})
-            status_value = status.get('value') if isinstance(status, dict) else str(status)
-            if status_value in ['Completed', 'Error']:
-                logger.info(f"⏭️ Job {uuid} already {status_value}, skipping duplicate webhook")
-                return
-            
             # Reconstruct job info from Baserow record
             target_page = record.get('Target Page', [])
             if isinstance(target_page, list) and len(target_page) > 0:
@@ -261,12 +255,8 @@ async def handle_sora_webhook(request):
         logger.info(f"📥 Webhook received: {event} for {uuid}")
         
         if event == 'VIDEO_GENERATION_COMPLETED':
-            # media_url can be at top level or inside data object
-            video_url = payload.get('media_url') or data.get('media_url')
-            if uuid and video_url:
-                await complete_video_generation(uuid, video_url)
-            else:
-                logger.warning(f"Missing video_url in completed webhook for {uuid}. Full data: {json.dumps(data, default=str)[:500]}")
+            # Ignore completion webhooks - polling handles this to avoid duplicates
+            logger.info(f"⏭️ Ignoring completion webhook for {uuid} - polling will handle it")
         
         elif event == 'VIDEO_GENERATION_FAILED':
             error_msg = payload.get('error_message') or data.get('error_message') or 'Unknown error'
