@@ -45,7 +45,7 @@ Format:
         ],
         "generationConfig": {
             "temperature": 0.9,
-            "maxOutputTokens": 300  # Increased to prevent truncation
+            "maxOutputTokens": 1024  # Must be high because thinking tokens also count
         }
     }
     
