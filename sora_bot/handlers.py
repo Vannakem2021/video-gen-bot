@@ -9,7 +9,7 @@ import asyncio
 from datetime import datetime, timezone, timedelta
 from aiohttp import web
 
-from .config import pending_jobs, logger
+from .config import pending_jobs, processed_uuids, logger
 from .helpers import escape_markdown, parse_video_length
 from .telegram_client import send_telegram_message
 from .sora_api import generate_video, poll_for_completion, check_job_status
@@ -255,8 +255,20 @@ async def handle_sora_webhook(request):
         logger.info(f"📥 Webhook received: {event} for {uuid}")
         
         if event == 'VIDEO_GENERATION_COMPLETED':
-            # Ignore completion webhooks - polling handles this to avoid duplicates
-            logger.info(f"⏭️ Ignoring completion webhook for {uuid} - polling will handle it")
+            # Check if already processed (duplicate prevention)
+            if uuid in processed_uuids:
+                logger.info(f"⏭️ UUID {uuid[:12]}... already processed, skipping duplicate webhook")
+                return web.Response(text="OK", status=200)
+            
+            # Get video URL from payload
+            video_url = payload.get('media_url') or data.get('media_url')
+            if uuid and video_url:
+                # Mark as processed BEFORE processing to prevent race condition
+                processed_uuids.add(uuid)
+                logger.info(f"✅ Processing completion webhook for {uuid[:12]}...")
+                await complete_video_generation(uuid, video_url)
+            else:
+                logger.warning(f"Missing video_url in webhook for {uuid}")
         
         elif event == 'VIDEO_GENERATION_FAILED':
             error_msg = payload.get('error_message') or data.get('error_message') or 'Unknown error'

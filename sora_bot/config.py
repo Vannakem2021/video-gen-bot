@@ -91,6 +91,9 @@ logger = logging.getLogger(__name__)
 # Track pending generations (uuid -> job_info)
 pending_jobs: Dict[str, dict] = {}
 
+# Track processed UUIDs to prevent duplicate webhook processing
+processed_uuids: set = set()
+
 # Baserow token cache
 baserow_token = None
 token_expiry = None
