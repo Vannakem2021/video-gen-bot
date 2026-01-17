@@ -14,7 +14,8 @@ async def generate_video(prompt: str, duration: int = 10) -> dict:
     if not SORA_API_KEY:
         raise Exception("SORA_API_KEY not configured")
     
-    url = "https://api.geminigen.ai/v1/video/new"
+    # Correct endpoint per docs: https://api.geminigen.ai/uapi/v1/video-gen/sora
+    url = "https://api.geminigen.ai/uapi/v1/video-gen/sora"
     
     headers = {
         "Content-Type": "application/json",
@@ -27,13 +28,18 @@ async def generate_video(prompt: str, duration: int = 10) -> dict:
         "prompt": prompt
     }
     
+    logger.info(f"🎬 Calling Sora API (sora-2, {duration}s)...")
+    
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=payload) as resp:
-            if resp.status != 200:
+            if resp.status not in [200, 201]:
                 error = await resp.text()
                 raise Exception(f"Sora API error: {resp.status} - {error}")
             
-            return await resp.json()
+            data = await resp.json()
+            uuid = data.get('uuid')
+            logger.info(f"✅ Generation started: {uuid}")
+            return data
 
 
 async def poll_for_completion(uuid: str, max_attempts: int = 30, delay_seconds: int = 15) -> dict:
