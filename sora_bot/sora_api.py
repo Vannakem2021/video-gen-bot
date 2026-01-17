@@ -19,7 +19,7 @@ async def generate_video(prompt: str, duration: int = 10) -> dict:
     
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {SORA_API_KEY}"
+        "x-api-key": SORA_API_KEY
     }
     
     payload = {
