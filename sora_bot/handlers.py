@@ -12,7 +12,7 @@ from aiohttp import web
 from .config import pending_jobs, logger
 from .helpers import escape_markdown, parse_video_length
 from .telegram_client import send_telegram_message
-from .sora_api import generate_video, poll_for_completion
+from .sora_api import generate_video, poll_for_completion, check_job_status
 from .gemini_caption import generate_caption
 from .baserow_client import (
     get_ready_records, update_record_status, create_post_queue_record, get_page_name,
@@ -381,52 +381,133 @@ async def recover_pending_jobs():
 
 
 async def cleanup_stale_jobs():
-    """Background task to mark jobs stuck in Processing for >30 min as Error"""
+    """Background task to check on Processing jobs and handle completed/failed ones
+    
+    Runs every 10 minutes to:
+    1. Poll GeminiGen API for actual status of jobs
+    2. Complete any jobs that finished but webhook was missed
+    3. Mark failed jobs as Error with notification
+    4. Mark jobs >30 min old as Error (timeout)
+    """
+    CHECK_INTERVAL_SECONDS = 600  # Run every 10 minutes
     STALE_THRESHOLD_MINUTES = 30
     
     while True:
-        await asyncio.sleep(1800)  # Run every 30 minutes
+        await asyncio.sleep(CHECK_INTERVAL_SECONDS)
         
         try:
-            logger.info("🧹 Running stale job cleanup...")
+            logger.info("🔍 Checking status of Processing jobs...")
             
             processing_records = await get_records_by_status('Processing')
             now = datetime.now(timezone.utc)
-            stale_count = 0
+            
+            completed_count = 0
+            failed_count = 0
+            timeout_count = 0
             
             for record in processing_records:
-                # Check in-memory job first
                 uuid = record.get('Generation UUID')
-                if uuid and uuid in pending_jobs:
-                    job = pending_jobs[uuid]
-                    started_at_str = job.get('started_at')
-                    if started_at_str:
+                record_id = record['id']
+                
+                if not uuid:
+                    # No UUID - can't check, mark as error after timeout
+                    logger.warning(f"⚠️ Record {record_id} has no UUID, marking as Error")
+                    await update_record_status(record_id, 'Error')
+                    await send_telegram_message(
+                        f"⚠️ *Job Error*\nRecord {record_id} stuck without UUID",
+                        None
+                    )
+                    timeout_count += 1
+                    continue
+                
+                # Poll GeminiGen API for actual status
+                logger.info(f"🔍 Checking status for {uuid[:12]}...")
+                status_info = await check_job_status(uuid)
+                api_status = status_info.get('status', 0)
+                
+                if api_status == 2:  # Completed!
+                    logger.info(f"✅ Job {uuid[:12]}... completed (webhook missed)")
+                    video_url = status_info.get('media_url')
+                    if video_url:
+                        await complete_video_generation(uuid, video_url)
+                        completed_count += 1
+                    else:
+                        # Completed but no URL - check raw data
+                        raw = status_info.get('raw', {})
+                        generated = raw.get('generated_video', [])
+                        if generated:
+                            video_url = generated[0].get('video_url') or generated[0].get('file_download_url')
+                            if video_url:
+                                await complete_video_generation(uuid, video_url)
+                                completed_count += 1
+                                continue
+                        
+                        logger.error(f"Job {uuid[:12]}... completed but no video URL found")
+                        await update_record_status(record_id, 'Error')
+                        await send_telegram_message(
+                            f"⚠️ *Job Completed but No Video URL*\nUUID: `{uuid[:12]}...`",
+                            None
+                        )
+                        failed_count += 1
+                
+                elif api_status == 3:  # Failed!
+                    error_msg = status_info.get('error_message') or 'Unknown error'
+                    logger.error(f"❌ Job {uuid[:12]}... failed: {error_msg}")
+                    
+                    await update_record_status(record_id, 'Error')
+                    await send_telegram_message(
+                        f"❌ *Video Generation Failed*\n\n"
+                        f"UUID: `{uuid[:12]}...`\n"
+                        f"Error: {escape_markdown(error_msg)}",
+                        None
+                    )
+                    
+                    if uuid in pending_jobs:
+                        del pending_jobs[uuid]
+                    failed_count += 1
+                
+                elif api_status == 1:  # Still processing
+                    # Check if it's been too long (timeout)
+                    job = pending_jobs.get(uuid)
+                    if job and job.get('started_at'):
                         try:
-                            started_at = datetime.fromisoformat(started_at_str)
+                            started_at = datetime.fromisoformat(job['started_at'])
                             age_minutes = (now - started_at).total_seconds() / 60
                             if age_minutes > STALE_THRESHOLD_MINUTES:
-                                logger.warning(f"⏰ Job {uuid[:12]}... is stale ({age_minutes:.0f} min old)")
-                                await update_record_status(record['id'], 'Error')
+                                logger.warning(f"⏰ Job {uuid[:12]}... timed out ({age_minutes:.0f} min)")
+                                await update_record_status(record_id, 'Error')
+                                await send_telegram_message(
+                                    f"⏰ *Job Timed Out*\n\n"
+                                    f"UUID: `{uuid[:12]}...`\n"
+                                    f"Age: {age_minutes:.0f} minutes",
+                                    None
+                                )
                                 del pending_jobs[uuid]
-                                stale_count += 1
+                                timeout_count += 1
                         except:
                             pass
+                    else:
+                        logger.info(f"⏳ Job {uuid[:12]}... still processing ({status_info.get('status_percentage', 0)}%)")
+                
                 else:
-                    # No UUID or not in memory - might be orphaned, mark as error
-                    logger.warning(f"⚠️ Record {record['id']} stuck in Processing with no active job")
-                    await update_record_status(record['id'], 'Error')
-                    stale_count += 1
+                    # Unknown status - log but don't fail
+                    logger.warning(f"❓ Job {uuid[:12]}... has unknown status: {api_status}")
             
-            if stale_count > 0:
+            # Summary
+            total = completed_count + failed_count + timeout_count
+            if total > 0:
                 await send_telegram_message(
-                    f"🧹 *Stale Job Cleanup*\n"
-                    f"Marked {stale_count} stuck job(s) as Error",
+                    f"🔍 *Job Status Check Complete*\n"
+                    f"✅ Completed: {completed_count}\n"
+                    f"❌ Failed: {failed_count}\n"
+                    f"⏰ Timeout: {timeout_count}",
                     None
                 )
-                logger.info(f"🧹 Cleanup complete: {stale_count} stale jobs marked as Error")
-            else:
-                logger.info("🧹 Cleanup complete: No stale jobs found")
+            logger.info(f"🔍 Status check complete: {completed_count} completed, {failed_count} failed, {timeout_count} timeout")
                 
         except Exception as e:
-            logger.error(f"Error during stale job cleanup: {e}")
+            logger.error(f"Error during job status check: {e}")
+            import traceback
+            traceback.print_exc()
+
 

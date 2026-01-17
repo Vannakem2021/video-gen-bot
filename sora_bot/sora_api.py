@@ -48,6 +48,40 @@ async def generate_video(prompt: str, duration: int = 10) -> str:
             return uuid
 
 
+async def check_job_status(uuid: str) -> dict:
+    """Check job status from GeminiGen API (single poll, no waiting)
+    
+    Returns dict with:
+    - status: 1=processing, 2=completed, 3=failed
+    - status_desc: human readable status
+    - error_message: if failed
+    - media_url: if completed
+    """
+    if not SORA_API_KEY:
+        raise Exception("SORA_API_KEY not configured")
+    
+    url = f"https://api.geminigen.ai/uapi/v1/history/{uuid}"
+    headers = {'x-api-key': SORA_API_KEY}
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=30) as resp:
+                if resp.status != 200:
+                    return {'status': 0, 'error_message': f'API error: {resp.status}'}
+                
+                data = await resp.json()
+                return {
+                    'status': data.get('status', 0),
+                    'status_desc': data.get('status_desc', 'Unknown'),
+                    'status_percentage': data.get('status_percentage', 0),
+                    'error_message': data.get('error_message'),
+                    'media_url': data.get('media_url'),
+                    'raw': data
+                }
+    except Exception as e:
+        logger.error(f"Error checking job status for {uuid}: {e}")
+        return {'status': 0, 'error_message': str(e)}
+
 async def poll_for_completion(uuid: str, max_attempts: int = 30, delay_seconds: int = 15) -> str:
     """Poll for video completion (fallback if webhook not working)"""
     import asyncio
