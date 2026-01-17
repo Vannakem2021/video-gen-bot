@@ -346,12 +346,15 @@ async def create_post_queue_record(source_record_id, page_id, video_url: str, ca
     """Create Post Queue record with scheduling"""
     global _baserow_token, _token_expiry
     
-    # Get existing scheduled posts
+    # Get existing scheduled posts FOR THIS PAGE ONLY
+    # Each page gets its own 8 AM and 9 PM slots
     list_url = f"{BASEROW_URL}/api/database/rows/table/{POST_QUEUE_TABLE}/"
+    # Must use option ID for single_select_equal filter, not text value
+    scheduled_status_id = POST_QUEUE_STATUS_OPTIONS.get('Scheduled', 3060)
     params = {
         'user_field_names': 'true',
-        'filter__Status__single_select_equal': 'Scheduled',
-        'size': 100
+        'filter__Status__single_select_equal': scheduled_status_id,
+        'size': 200  # Increased to ensure we get all scheduled posts
     }
     
     scheduled_slots = []
@@ -365,12 +368,27 @@ async def create_post_queue_record(source_record_id, page_id, video_url: str, ca
                     posts = data.get('results', [])
                     
                     for post in posts:
+                        # Only consider posts for THIS page
+                        post_pages = post.get('Page Name', [])
+                        post_page_ids = []
+                        for p in post_pages:
+                            if isinstance(p, dict):
+                                post_page_ids.append(str(p.get('id', '')))
+                            else:
+                                post_page_ids.append(str(p))
+                        
+                        # Skip if this post is for a different page
+                        if str(page_id) not in post_page_ids:
+                            continue
+                        
                         schedule_for = post.get('Schedule For')
                         if schedule_for:
                             try:
                                 scheduled_slots.append(datetime.fromisoformat(schedule_for.replace('Z', '+00:00')))
                             except:
                                 pass
+                    
+                    logger.info(f"Found {len(scheduled_slots)} existing scheduled slots for page {page_id}")
     except Exception as e:
         logger.warning(f"Could not fetch scheduled slots: {e}")
     
