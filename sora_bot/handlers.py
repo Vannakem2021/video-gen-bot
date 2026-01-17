@@ -167,6 +167,13 @@ async def complete_video_generation(uuid: str, video_url: str):
         logger.info(f"Job {uuid} not in memory, checking Baserow...")
         record = await get_record_by_uuid(uuid)
         if record:
+            # Check if already completed (race condition prevention)
+            status = record.get('Status', {})
+            status_value = status.get('value') if isinstance(status, dict) else str(status)
+            if status_value in ['Completed', 'Error']:
+                logger.info(f"⏭️ Job {uuid} already {status_value}, skipping duplicate webhook")
+                return
+            
             # Reconstruct job info from Baserow record
             target_page = record.get('Target Page', [])
             if isinstance(target_page, list) and len(target_page) > 0:
