@@ -319,6 +319,11 @@ async def update_record_status(record_id, status: str, video_url: str = None):
             update_fields['Video'] = [{'name': file_token}]
         update_fields['Ready To Generate'] = False
     
+    # Clear Generation UUID on completion or error to prevent duplicate webhook processing
+    if status in ['Completed', 'Error']:
+        update_fields['Generation UUID'] = ''
+        logger.info(f"Clearing Generation UUID for record {record_id} (status={status})")
+    
     for attempt in range(2):
         try:
             headers = await get_baserow_headers()
