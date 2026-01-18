@@ -16,6 +16,10 @@ from .config import (
 )
 from .helpers import get_next_available_slot
 
+# HTTP Timeouts
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
+UPLOAD_TIMEOUT = aiohttp.ClientTimeout(total=120)
+
 # Global token cache (module-level)
 _baserow_token = None
 _token_expiry = None
@@ -33,7 +37,7 @@ async def get_baserow_token() -> str:
     url = f"{BASEROW_URL}/api/user/token-auth/"
     payload = {'email': BASEROW_USERNAME, 'password': BASEROW_PASSWORD}
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
         async with session.post(url, json=payload) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
@@ -74,7 +78,7 @@ async def get_record_by_uuid(uuid: str):
     for attempt in range(2):
         try:
             headers = await get_baserow_headers()
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
                 async with session.get(url, headers=headers, params=params) as resp:
                     if resp.status == 401 and attempt == 0:
                         clear_token_cache()

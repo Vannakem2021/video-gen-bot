@@ -17,7 +17,11 @@ async def generate_caption(video_prompt: str) -> str:
         return "Check this out! 🔥\n#Viral #Trending #ForYou"
     
     # Use Gemini 2.5 Flash (fast and capable)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+    headers = {
+        'x-goog-api-key': GEMINI_API_KEY,
+        'Content-Type': 'application/json'
+    }
     
     system_prompt = """You are a viral social media caption expert. Generate short, engaging captions for video posts.
 
@@ -50,8 +54,9 @@ Format:
     }
     
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=30) as resp:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
                 if resp.status != 200:
                     error = await resp.text()
                     logger.error(f"Gemini API error: {resp.status} - {error}")

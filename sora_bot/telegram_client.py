@@ -9,6 +9,8 @@ from typing import List, Optional
 
 from .config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS, logger, pending_jobs
 
+# HTTP Timeout
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=30)
 
 # Default keyboard buttons
 DEFAULT_KEYBOARD = [
@@ -26,7 +28,7 @@ async def send_telegram_message(text: str, chat_ids: List[str] = None):
     chat_ids = chat_ids or TELEGRAM_CHAT_IDS
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
         for chat_id in chat_ids:
             if not chat_id:
                 continue
@@ -63,7 +65,7 @@ async def send_telegram_with_keyboard(text: str, chat_id: str, keyboard: list = 
         }
     }
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
         try:
             async with session.post(url, json=payload) as resp:
                 if resp.status != 200:

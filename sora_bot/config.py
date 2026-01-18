@@ -6,6 +6,7 @@ Contains all configuration constants, API keys, and global state.
 
 import os
 import logging
+from collections import deque
 from datetime import timedelta, timezone
 from typing import Dict
 from dotenv import load_dotenv
@@ -64,6 +65,9 @@ WEBHOOK_HOST = os.getenv('WEBHOOK_HOST', '0.0.0.0')
 WEBHOOK_PORT = int(os.getenv('WEBHOOK_PORT', '8080'))
 WEBHOOK_PATH = '/sora-callback'
 
+# Webhook authentication (optional - set to enable)
+WEBHOOK_SECRET = os.getenv('WEBHOOK_SECRET', '')
+
 # ==================================================
 # TIMEZONE & SCHEDULING
 # ==================================================
@@ -91,9 +95,10 @@ logger = logging.getLogger(__name__)
 # Track pending generations (uuid -> job_info)
 pending_jobs: Dict[str, dict] = {}
 
-# Track processed UUIDs to prevent duplicate webhook processing
-processed_uuids: set = set()
+# Track processed UUIDs to prevent duplicate processing (bounded to prevent memory leak)
+processed_uuids: deque = deque(maxlen=1000)
 
 # Baserow token cache
 baserow_token = None
 token_expiry = None
+

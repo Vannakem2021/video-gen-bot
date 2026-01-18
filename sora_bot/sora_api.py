@@ -8,6 +8,9 @@ import aiohttp
 
 from .config import SORA_API_KEY, logger
 
+# HTTP Timeouts
+DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=60)
+
 
 async def generate_video(prompt: str, duration: int = 10) -> str:
     """Call GeminiGen.ai Sora 2 API to generate video"""
@@ -32,7 +35,7 @@ async def generate_video(prompt: str, duration: int = 10) -> str:
     
     headers = {'x-api-key': SORA_API_KEY}
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
         async with session.post(url, data=form_data, headers=headers) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
@@ -64,7 +67,7 @@ async def check_job_status(uuid: str) -> dict:
     headers = {'x-api-key': SORA_API_KEY}
     
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
             async with session.get(url, headers=headers, timeout=30) as resp:
                 if resp.status != 200:
                     return {'status': 0, 'error_message': f'API error: {resp.status}'}
@@ -94,7 +97,7 @@ async def poll_for_completion(uuid: str, max_attempts: int = 30, delay_seconds: 
     url = f"https://api.geminigen.ai/uapi/v1/history/{uuid}"
     headers = {'x-api-key': SORA_API_KEY}
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT) as session:
         for attempt in range(1, max_attempts + 1):
             await asyncio.sleep(delay_seconds)
             

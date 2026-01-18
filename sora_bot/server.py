@@ -76,9 +76,28 @@ async def poll_telegram_updates():
                         
                         await handle_telegram_message(text, chat_id)
                         
+            except asyncio.CancelledError:
+                logger.info("Telegram polling cancelled, shutting down gracefully")
+                raise
+            except aiohttp.ClientError as e:
+                logger.error(f"Telegram polling network error: {e}")
+                await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Telegram polling error: {e}")
                 await asyncio.sleep(5)
+
+
+async def resilient_telegram_polling():
+    """Wrapper that auto-restarts polling on crashes"""
+    while True:
+        try:
+            await poll_telegram_updates()
+        except asyncio.CancelledError:
+            logger.info("Resilient polling cancelled, exiting")
+            break
+        except Exception as e:
+            logger.error(f"Polling crashed, restarting in 5s: {e}")
+            await asyncio.sleep(5)
 
 
 async def main():
@@ -137,8 +156,12 @@ async def main():
     asyncio.create_task(cleanup_stale_jobs())
     logger.info("🧹 Stale job cleanup task started (runs every 30 min)")
     
-    # Start Telegram polling
-    await poll_telegram_updates()
+    # Start Telegram polling with auto-restart
+    asyncio.create_task(resilient_telegram_polling())
+    logger.info("📱 Telegram polling started (with auto-restart)")
+    
+    # Keep main alive indefinitely
+    await asyncio.Event().wait()
 
 
 if __name__ == "__main__":

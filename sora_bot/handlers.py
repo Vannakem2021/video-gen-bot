@@ -160,6 +160,13 @@ async def poll_and_complete(uuid: str):
 async def complete_video_generation(uuid: str, video_url: str):
     """Complete video generation - save to Baserow, generate caption, notify"""
     
+    # Duplicate prevention - check FIRST before any processing
+    # This protects ALL entry points: webhook, cleanup_stale_jobs, poll_and_complete
+    if uuid in processed_uuids:
+        logger.info(f"⏭️ UUID {uuid[:12]}... already completed, skipping duplicate")
+        return
+    processed_uuids.append(uuid)  # deque uses append, not add
+    
     job = pending_jobs.get(uuid)
     
     # Job should always be in pending_jobs when called from polling
@@ -240,6 +247,14 @@ async def complete_video_generation(uuid: str, video_url: str):
 
 async def handle_sora_webhook(request):
     """Handle GeminiGen.ai webhook callback"""
+    from .config import WEBHOOK_SECRET
+    
+    # Validate webhook secret if configured
+    if WEBHOOK_SECRET:
+        auth_header = request.headers.get('X-Webhook-Secret', '')
+        if auth_header != WEBHOOK_SECRET:
+            logger.warning("⚠️ Webhook rejected: invalid secret")
+            return web.Response(text="Unauthorized", status=401)
     
     try:
         data = await request.json()
@@ -255,16 +270,9 @@ async def handle_sora_webhook(request):
         logger.info(f"📥 Webhook received: {event} for {uuid}")
         
         if event == 'VIDEO_GENERATION_COMPLETED':
-            # Check if already processed (duplicate prevention)
-            if uuid in processed_uuids:
-                logger.info(f"⏭️ UUID {uuid[:12]}... already processed, skipping duplicate webhook")
-                return web.Response(text="OK", status=200)
-            
             # Get video URL from payload
             video_url = payload.get('media_url') or data.get('media_url')
             if uuid and video_url:
-                # Mark as processed BEFORE processing to prevent race condition
-                processed_uuids.add(uuid)
                 logger.info(f"✅ Processing completion webhook for {uuid[:12]}...")
                 await complete_video_generation(uuid, video_url)
             else:
