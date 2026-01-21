@@ -510,17 +510,30 @@ async def cleanup_stale_jobs():
                     # Unknown status - log but don't fail
                     logger.warning(f"❓ Job {uuid[:12]}... has unknown status: {api_status}")
             
-            # Summary
-            total = completed_count + failed_count + timeout_count
-            if total > 0:
+            # Summary - also count already-completed jobs (via webhook)
+            already_completed = await get_records_by_status('Completed')
+            already_completed_count = len(already_completed) if already_completed else 0
+            
+            already_errored = await get_records_by_status('Error')
+            already_errored_count = len(already_errored) if already_errored else 0
+            
+            total_checked = len(processing_records) if processing_records else 0
+            
+            # Always send summary when there are processing jobs OR when cleanup found issues
+            if total_checked > 0 or completed_count > 0 or failed_count > 0 or timeout_count > 0:
                 await send_telegram_message(
-                    f"🔍 *Job Status Check Complete*\n"
-                    f"✅ Completed: {completed_count}\n"
-                    f"❌ Failed: {failed_count}\n"
-                    f"⏰ Timeout: {timeout_count}",
+                    f"🔍 *Job Status Check Complete*\n\n"
+                    f"📊 *Current Stats:*\n"
+                    f"✅ Completed: {already_completed_count}\n"
+                    f"❌ Errored: {already_errored_count}\n"
+                    f"⏳ Still Processing: {total_checked - completed_count - failed_count - timeout_count}\n\n"
+                    f"🔄 *This Check Fixed:*\n"
+                    f"• Recovered: {completed_count}\n"
+                    f"• Failed: {failed_count}\n"
+                    f"• Timed out: {timeout_count}",
                     None
                 )
-            logger.info(f"🔍 Status check complete: {completed_count} completed, {failed_count} failed, {timeout_count} timeout")
+            logger.info(f"🔍 Status check complete: {already_completed_count} total completed, {already_errored_count} errored, {completed_count} recovered this check")
                 
         except Exception as e:
             logger.error(f"Error during job status check: {e}")
